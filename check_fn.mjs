@@ -1,0 +1,10 @@
+import pg from 'pg';
+import 'dotenv/config';
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const client = await pool.connect();
+await client.query('BEGIN');
+await client.query('SET LOCAL ROLE app_backend');
+const r = await client.query("SELECT pg_get_functiondef(oid) AS def FROM pg_proc WHERE proname = 'create_gym_with_owner'");
+console.log(r.rows[0]?.def ?? 'NOT FOUND');
+await client.query('ROLLBACK');
+await pool.end();
