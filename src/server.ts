@@ -14,6 +14,7 @@ import healthRoutes from './routes/health.js';
 import memberRoutes from './routes/members.js';
 import paymentRoutes from './routes/payments.js';
 import planRoutes from './routes/plans.js';
+import testReminderRoutes from './routes/testReminders.js';
 
 /**
  * Compose the Fastify instance. Side-effect free — index.ts handles
@@ -125,6 +126,8 @@ export async function buildServer() {
   await app.register(memberRoutes);
   await app.register(dashboardRoutes);
   await app.register(paymentRoutes);
+  // TEMPORARY — remove after AiSensy reminder testing (see routes/testReminders.ts)
+  await app.register(testReminderRoutes);
 
   // ---------- 404 --------------------------------------------------------
   app.setNotFoundHandler((req, reply) => {

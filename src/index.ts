@@ -4,6 +4,7 @@
  * in-flight requests and DB connections close cleanly on SIGINT/SIGTERM.
  */
 import { env } from './config/env.js';
+import { startDailyRemindersCron } from './cron/dailyReminders.js';
 import { closePools, verifyTenancySetup } from './db/pool.js';
 import { buildServer } from './server.js';
 
@@ -23,6 +24,9 @@ async function main(): Promise<void> {
   }
 
   await app.listen({ host: '0.0.0.0', port: env.PORT });
+
+  startDailyRemindersCron();
+  app.log.info('daily WhatsApp reminder cron scheduled (08:00 IST)');
 
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, 'shutdown requested');

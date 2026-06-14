@@ -65,15 +65,16 @@ const EnvSchema = z.object({
     .optional()
     .or(z.literal('').transform(() => undefined)),
 
-  BSP_API_URL: z
+  AISENSY_API_URL: z
+    .string()
+    .url()
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  AISENSY_API_KEY: z
     .string()
     .optional()
     .or(z.literal('').transform(() => undefined)),
-  BSP_API_KEY: z
-    .string()
-    .optional()
-    .or(z.literal('').transform(() => undefined)),
-  BSP_TEMPLATE_ID: z
+  AISENSY_CAMPAIGN_NAME: z
     .string()
     .optional()
     .or(z.literal('').transform(() => undefined)),
