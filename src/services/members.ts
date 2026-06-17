@@ -239,14 +239,20 @@ export interface DashboardView {
     revenue: number;
   };
   expiring_this_week: MemberView[];
+  sms_credits: number;
+  sms_frozen: boolean;
 }
 
 export async function getDashboard(gymId: string): Promise<DashboardView> {
   return withTenant(gymId, async (client) => {
-    const [membersR, planMap, paymentsR] = await Promise.all([
+    const [membersR, planMap, paymentsR, gymR] = await Promise.all([
       client.query<MemberRow>(`SELECT ${MEMBER_COLUMNS} FROM members`),
       getPlanMap(client),
       client.query<{ amount: number; paid_at: Date }>('SELECT amount, paid_at FROM payments'),
+      client.query<{ sms_credits: number; sms_frozen: boolean }>(
+        `SELECT sms_credits, sms_frozen FROM gyms
+         WHERE id = current_setting('app.current_gym_id')::uuid`,
+      ),
     ]);
 
     const today = todayIST();
@@ -270,9 +276,13 @@ export async function getDashboard(gymId: string): Promise<DashboardView> {
       .filter((m) => m.status === 'expiring')
       .sort((a, b) => a.days_remaining - b.days_remaining);
 
+    const gym = gymR.rows[0];
+
     return {
       stats: { total: decorated.length, active, expiring, expired, revenue },
       expiring_this_week: expiringThisWeek,
+      sms_credits: gym?.sms_credits ?? 0,
+      sms_frozen: gym?.sms_frozen ?? false,
     };
   });
 }

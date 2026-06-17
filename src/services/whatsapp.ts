@@ -8,15 +8,16 @@ const ENDPOINT = 'https://backend.aisensy.com/campaign/t1/api/v2';
  * Template params order must match the approved template:
  *   {{1}} = memberName, {{2}} = gymName, {{3}} = daysLeft
  *
- * Phone must be a 10-digit Indian mobile number or a 12-digit "91XXXXXXXXXX"
- * string — either form is normalised to the E.164 destination AiSensy expects.
+ * Phone can be a 10-digit Indian mobile or a 12-digit "91XXXXXXXXXX" string.
+ *
+ * Returns the submitted_message_id from AiSensy on success.
  */
 export async function sendWhatsApp(
   phone: string,
   memberName: string,
   gymName: string,
   daysLeft: number,
-): Promise<void> {
+): Promise<string> {
   if (!env.AISENSY_API_KEY || !env.AISENSY_CAMPAIGN_NAME) {
     throw new Error('AISENSY_API_KEY / AISENSY_CAMPAIGN_NAME not set');
   }
@@ -47,4 +48,7 @@ export async function sendWhatsApp(
     const text = await res.text().catch(() => '(no body)');
     throw new Error(`AiSensy ${res.status}: ${text}`);
   }
+
+  const json = await res.json() as { submitted_message_id?: string };
+  return json.submitted_message_id ?? 'unknown';
 }

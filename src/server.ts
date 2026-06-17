@@ -14,9 +14,6 @@ import healthRoutes from './routes/health.js';
 import memberRoutes from './routes/members.js';
 import paymentRoutes from './routes/payments.js';
 import planRoutes from './routes/plans.js';
-import { requireAuth } from './middleware/auth.js';
-import { sendWhatsApp } from './services/whatsapp.js';
-import { runDailyReminders } from './cron/dailyReminders.js';
 
 /**
  * Compose the Fastify instance. Side-effect free — index.ts handles
@@ -128,38 +125,6 @@ export async function buildServer() {
   await app.register(memberRoutes);
   await app.register(dashboardRoutes);
   await app.register(paymentRoutes);
-
-  // ---------- DEV / test routes (REMOVE after live WhatsApp test) --------
-  // POST /api/v1/dev/test-whatsapp  — fire a single WhatsApp to any phone
-  // POST /api/v1/dev/run-reminders  — trigger the full cron job immediately
-  app.post(
-    '/api/v1/dev/test-whatsapp',
-    { preHandler: requireAuth },
-    async (req, reply) => {
-      const body = req.body as {
-        phone?: string;
-        memberName?: string;
-        gymName?: string;
-        daysLeft?: number;
-      };
-      const phone = body.phone ?? '8825959572';
-      const memberName = body.memberName ?? 'Test Member';
-      const gymName = body.gymName ?? 'Kai Green Fitness';
-      const daysLeft = body.daysLeft ?? 3;
-      await sendWhatsApp(phone, memberName, gymName, daysLeft);
-      reply.send({ ok: true, destination: `91${phone.replace(/\D/g, '')}` });
-    },
-  );
-
-  app.post(
-    '/api/v1/dev/run-reminders',
-    { preHandler: requireAuth },
-    async (_req, reply) => {
-      void runDailyReminders(app.log);
-      reply.send({ ok: true, message: 'reminder run triggered (async)' });
-    },
-  );
-  // -----------------------------------------------------------------------
 
   // ---------- 404 --------------------------------------------------------
   app.setNotFoundHandler((req, reply) => {
