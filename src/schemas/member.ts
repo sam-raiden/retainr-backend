@@ -12,6 +12,9 @@ export const MemberCreateSchema = z.object({
   phone: PhoneSchema,
   plan: PlanSchema,
   payment_date: ISODateSchema,
+  payment_method: z.enum(['CASH', 'GPAY']).default('CASH'),
+  payment_amount: z.number().int().min(0).optional(),
+  note: z.string().max(200).optional(),
   photo_url: z.string().nullable().optional(),
 });
 export type MemberCreateInput = z.infer<typeof MemberCreateSchema>;
@@ -36,6 +39,8 @@ export type MemberUpdateInput = z.infer<typeof MemberUpdateSchema>;
 export const MemberRenewSchema = z.object({
   plan: PlanSchema.optional(),
   payment_method: z.enum(['CASH', 'GPAY']),
+  payment_amount: z.number().int().min(0).optional(),
+  note: z.string().max(200).optional(),
 });
 export type MemberRenewInput = z.infer<typeof MemberRenewSchema>;
 

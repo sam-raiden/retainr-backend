@@ -6,6 +6,7 @@ import { MemberCreateSchema, MemberRenewSchema, MemberUpdateSchema } from '../sc
 import { BULK_IMPORT_TEMPLATE_CSV, bulkImportMembers, parseMembersCsv } from '../services/bulkImport.js';
 import { assertValidPhoto, uploadMemberPhoto } from '../services/photos.js';
 import { createMember, deleteMember, listMembers, renewMember, setMemberPhoto, updateMember } from '../services/members.js';
+import { listMemberPayments } from '../services/payments.js';
 import { listActivePlans } from '../services/plans.js';
 import { HttpError } from '../utils/errors.js';
 
@@ -48,9 +49,9 @@ export default async function memberRoutes(app: FastifyInstance) {
     }
 
     try {
-      const member = await createMember(req.user.gym_id, parsed.data);
+      const result = await createMember(req.user.gym_id, parsed.data);
       reply.code(201);
-      return { member };
+      return result;
     } catch (err) {
       if (err instanceof Error && 'code' in err && err.code === '23505') {
         return reply.code(409).send({ error: 'Conflict', message: 'A member with this phone number already exists' });
@@ -121,6 +122,15 @@ export default async function memberRoutes(app: FastifyInstance) {
     }
 
     return renewMember(req.user.gym_id, params.data.id, parsed.data);
+  });
+
+  app.get('/api/v1/members/:id/payments', { preHandler: requireAuth }, async (req, reply) => {
+    const params = IdParamSchema.safeParse(req.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: 'Bad Request', message: 'Invalid member id' });
+    }
+    const payments = await listMemberPayments(req.user.gym_id, params.data.id);
+    return { payments };
   });
 
   app.post('/api/v1/members/:id/photo', { preHandler: requireAuth }, async (req, reply) => {

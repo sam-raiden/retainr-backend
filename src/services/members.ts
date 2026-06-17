@@ -91,17 +91,50 @@ export async function listMembers(gymId: string): Promise<MemberView[]> {
   });
 }
 
-export async function createMember(gymId: string, input: MemberCreateInput): Promise<MemberView> {
+export interface CreateMemberResult {
+  member: MemberView;
+  payment: {
+    id: string;
+    amount: number;
+    payment_method: string;
+    paid_at: string;
+    plan: string;
+    note: string | null;
+  };
+}
+
+export async function createMember(gymId: string, input: MemberCreateInput): Promise<CreateMemberResult> {
   return withTenant(gymId, async (client) => {
     const planMap = await getPlanMap(client);
     const expiryDate = addCalendarMonths(input.payment_date, planDuration(planMap, input.plan));
-    const r = await client.query<MemberRow>(
+    const memberR = await client.query<MemberRow>(
       `INSERT INTO members (gym_id, name, phone, photo_url, plan, payment_date, expiry_date)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING ${MEMBER_COLUMNS}`,
       [gymId, input.name, input.phone, input.photo_url ?? null, input.plan, input.payment_date, expiryDate],
     );
-    return decorate(r.rows[0]!, planMap, todayIST());
+    const member = memberR.rows[0]!;
+    const planPrice = planMap.get(input.plan)?.price ?? 0;
+    const amount = input.payment_amount ?? planPrice;
+    const note = input.note ?? null;
+    const paymentR = await client.query<{ id: string; amount: number; payment_method: string; paid_at: Date; note: string | null }>(
+      `INSERT INTO payments (gym_id, member_id, amount, payment_method, note)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, amount, payment_method, paid_at, note`,
+      [gymId, member.id, amount, input.payment_method, note],
+    );
+    const payment = paymentR.rows[0]!;
+    return {
+      member: decorate(member, planMap, todayIST()),
+      payment: {
+        id: payment.id,
+        amount: payment.amount,
+        payment_method: payment.payment_method,
+        paid_at: toISTDateString(payment.paid_at),
+        plan: input.plan,
+        note: payment.note,
+      },
+    };
   });
 }
 
@@ -163,6 +196,7 @@ export interface RenewResult {
     payment_method: string;
     paid_at: string;
     plan: string;
+    note: string | null;
   };
   previous: {
     payment_date: string;
@@ -192,7 +226,9 @@ export async function renewMember(
     const today = todayIST();
     const planMap = await getPlanMap(client);
     const expiryDate = addCalendarMonths(today, planDuration(planMap, plan));
-    const amount = planMap.get(plan)?.price ?? 0;
+    const planPrice = planMap.get(plan)?.price ?? 0;
+    const amount = input.payment_amount ?? planPrice;
+    const note = input.note ?? null;
 
     const memberR = await client.query<MemberRow>(
       `UPDATE members SET plan = $1, payment_date = $2, expiry_date = $3
@@ -201,11 +237,11 @@ export async function renewMember(
       [plan, today, expiryDate, memberId],
     );
 
-    const paymentR = await client.query<{ id: string; amount: number; payment_method: string; paid_at: Date }>(
-      `INSERT INTO payments (gym_id, member_id, amount, payment_method)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, amount, payment_method, paid_at`,
-      [gymId, memberId, amount, input.payment_method],
+    const paymentR = await client.query<{ id: string; amount: number; payment_method: string; paid_at: Date; note: string | null }>(
+      `INSERT INTO payments (gym_id, member_id, amount, payment_method, note)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, amount, payment_method, paid_at, note`,
+      [gymId, memberId, amount, input.payment_method, note],
     );
     const payment = paymentR.rows[0]!;
 
@@ -217,6 +253,7 @@ export async function renewMember(
         payment_method: payment.payment_method,
         paid_at: toISTDateString(payment.paid_at),
         plan,
+        note: payment.note,
       },
       previous: {
         payment_date: existing.payment_date,

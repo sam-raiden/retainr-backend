@@ -11,6 +11,7 @@ export interface PaymentView {
   amount: number;
   payment_method: string | null;
   paid_at: string;
+  note: string | null;
 }
 
 interface PaymentRow {
@@ -22,6 +23,21 @@ interface PaymentRow {
   amount: number;
   payment_method: string | null;
   paid_at: Date;
+  note: string | null;
+}
+
+function toView(row: PaymentRow): PaymentView {
+  return {
+    id: row.id,
+    member_id: row.member_id,
+    member_name: row.member_name,
+    photo_url: row.photo_url,
+    plan: row.plan,
+    amount: row.amount,
+    payment_method: row.payment_method,
+    paid_at: toISTDateString(row.paid_at),
+    note: row.note,
+  };
 }
 
 /**
@@ -33,21 +49,28 @@ export async function listPayments(gymId: string): Promise<PaymentView[]> {
   return withTenant(gymId, async (client) => {
     const r = await client.query<PaymentRow>(
       `SELECT p.id, p.member_id, m.name AS member_name, m.photo_url, m.plan,
-              p.amount, p.payment_method, p.paid_at
+              p.amount, p.payment_method, p.paid_at, p.note
        FROM payments p
        JOIN members m ON m.id = p.member_id
        ORDER BY p.paid_at DESC`,
     );
-    return r.rows.map((row) => ({
-      id: row.id,
-      member_id: row.member_id,
-      member_name: row.member_name,
-      photo_url: row.photo_url,
-      plan: row.plan,
-      amount: row.amount,
-      payment_method: row.payment_method,
-      paid_at: toISTDateString(row.paid_at),
-    }));
+    return r.rows.map(toView);
+  });
+}
+
+/** All payments for a single member, newest first. */
+export async function listMemberPayments(gymId: string, memberId: string): Promise<PaymentView[]> {
+  return withTenant(gymId, async (client) => {
+    const r = await client.query<PaymentRow>(
+      `SELECT p.id, p.member_id, m.name AS member_name, m.photo_url, m.plan,
+              p.amount, p.payment_method, p.paid_at, p.note
+       FROM payments p
+       JOIN members m ON m.id = p.member_id
+       WHERE p.member_id = $1
+       ORDER BY p.paid_at DESC`,
+      [memberId],
+    );
+    return r.rows.map(toView);
   });
 }
 
