@@ -6,6 +6,7 @@
 import { env } from './config/env.js';
 import { closePools, verifyTenancySetup } from './db/pool.js';
 import { buildServer } from './server.js';
+import { startDailyCron } from './cron/dailyReminders.js';
 
 async function main(): Promise<void> {
   const app = await buildServer();
@@ -23,6 +24,8 @@ async function main(): Promise<void> {
   }
 
   await app.listen({ host: '0.0.0.0', port: env.PORT });
+
+  startDailyCron(app.log);
 
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, 'shutdown requested');

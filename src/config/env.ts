@@ -77,6 +77,20 @@ const EnvSchema = z.object({
     .string()
     .optional()
     .or(z.literal('').transform(() => undefined)),
+
+  AISENSY_API_URL: z
+    .string()
+    .url()
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  AISENSY_API_KEY: z
+    .string()
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  AISENSY_CAMPAIGN_NAME: z
+    .string()
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
