@@ -1,6 +1,7 @@
 import { withTenant } from '../db/pool.js';
 import { NotFoundError } from '../utils/errors.js';
 import { toISTDateString } from './dates.js';
+import { batchSignPhotoUrls } from './paymentPhotos.js';
 
 export interface PaymentView {
   id: string;
@@ -12,6 +13,7 @@ export interface PaymentView {
   payment_method: string | null;
   paid_at: string;
   note: string | null;
+  /** Fresh 1-hour signed URL generated at read-time, or null if no photo was taken. */
   approver_photo_url: string | null;
 }
 
@@ -25,10 +27,12 @@ interface PaymentRow {
   payment_method: string | null;
   paid_at: Date;
   note: string | null;
+  /** Storage path stored in DB, e.g. "{gymId}/payment-approvals/{paymentId}.jpg". Never a signed URL. */
   approver_photo_url: string | null;
 }
 
-function toView(row: PaymentRow): PaymentView {
+// signedUrls: path → fresh signed URL, generated once per list call
+function toView(row: PaymentRow, signedUrls: Map<string, string>): PaymentView {
   return {
     id: row.id,
     member_id: row.member_id,
@@ -39,14 +43,16 @@ function toView(row: PaymentRow): PaymentView {
     payment_method: row.payment_method,
     paid_at: toISTDateString(row.paid_at),
     note: row.note,
-    approver_photo_url: row.approver_photo_url,
+    approver_photo_url: row.approver_photo_url
+      ? (signedUrls.get(row.approver_photo_url) ?? null)
+      : null,
   };
 }
 
 /**
- * All payments for the gym, newest first. `plan` reflects the member's
- * *current* plan — payments don't snapshot the plan they were made under,
- * so a later plan switch will retroactively relabel older payment rows.
+ * All payments for the gym, newest first.
+ * approver_photo_url in the response is a fresh 1-hour signed URL,
+ * generated via a single batch Supabase Storage call.
  */
 export async function listPayments(gymId: string): Promise<PaymentView[]> {
   return withTenant(gymId, async (client) => {
@@ -57,7 +63,8 @@ export async function listPayments(gymId: string): Promise<PaymentView[]> {
        JOIN members m ON m.id = p.member_id
        ORDER BY p.paid_at DESC`,
     );
-    return r.rows.map(toView);
+    const signedUrls = await batchSignPhotoUrls(r.rows.map((row) => row.approver_photo_url));
+    return r.rows.map((row) => toView(row, signedUrls));
   });
 }
 
@@ -66,14 +73,15 @@ export async function listMemberPayments(gymId: string, memberId: string): Promi
   return withTenant(gymId, async (client) => {
     const r = await client.query<PaymentRow>(
       `SELECT p.id, p.member_id, m.name AS member_name, m.photo_url, m.plan,
-              p.amount, p.payment_method, p.paid_at, p.note
+              p.amount, p.payment_method, p.paid_at, p.note, p.approver_photo_url
        FROM payments p
        JOIN members m ON m.id = p.member_id
        WHERE p.member_id = $1
        ORDER BY p.paid_at DESC`,
       [memberId],
     );
-    return r.rows.map(toView);
+    const signedUrls = await batchSignPhotoUrls(r.rows.map((row) => row.approver_photo_url));
+    return r.rows.map((row) => toView(row, signedUrls));
   });
 }
 

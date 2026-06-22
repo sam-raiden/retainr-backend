@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../middleware/auth.js';
 import { IdParamSchema } from '../schemas/common.js';
 import { deletePayment, listPayments } from '../services/payments.js';
-import { uploadPaymentApprovalPhoto } from '../services/paymentPhotos.js';
+import { generateSignedUrl, uploadPaymentApprovalPhoto } from '../services/paymentPhotos.js';
 import { HttpError } from '../utils/errors.js';
 
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -52,13 +52,16 @@ export default async function paymentRoutes(app: FastifyInstance) {
     }
     if (buffer.length > MAX_BYTES) throw new HttpError(413, 'Photo must be under 5 MB');
 
-    const approverPhotoUrl = await uploadPaymentApprovalPhoto(
+    // uploadPaymentApprovalPhoto stores the durable storage PATH in the DB.
+    // We then generate a fresh 1-hour signed URL to return for immediate display.
+    const storagePath = await uploadPaymentApprovalPhoto(
       req.user.gym_id,
       params.data.id,
       buffer,
       mime,
     );
+    const signedUrl = await generateSignedUrl(storagePath);
 
-    return { approver_photo_url: approverPhotoUrl };
+    return { approver_photo_url: signedUrl };
   });
 }
