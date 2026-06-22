@@ -12,6 +12,7 @@ export interface PaymentView {
   payment_method: string | null;
   paid_at: string;
   note: string | null;
+  approver_photo_url: string | null;
 }
 
 interface PaymentRow {
@@ -24,6 +25,7 @@ interface PaymentRow {
   payment_method: string | null;
   paid_at: Date;
   note: string | null;
+  approver_photo_url: string | null;
 }
 
 function toView(row: PaymentRow): PaymentView {
@@ -37,6 +39,7 @@ function toView(row: PaymentRow): PaymentView {
     payment_method: row.payment_method,
     paid_at: toISTDateString(row.paid_at),
     note: row.note,
+    approver_photo_url: row.approver_photo_url,
   };
 }
 
@@ -49,7 +52,7 @@ export async function listPayments(gymId: string): Promise<PaymentView[]> {
   return withTenant(gymId, async (client) => {
     const r = await client.query<PaymentRow>(
       `SELECT p.id, p.member_id, m.name AS member_name, m.photo_url, m.plan,
-              p.amount, p.payment_method, p.paid_at, p.note
+              p.amount, p.payment_method, p.paid_at, p.note, p.approver_photo_url
        FROM payments p
        JOIN members m ON m.id = p.member_id
        ORDER BY p.paid_at DESC`,
