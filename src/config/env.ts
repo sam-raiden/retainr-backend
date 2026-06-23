@@ -91,6 +91,15 @@ const EnvSchema = z.object({
     .string()
     .optional()
     .or(z.literal('').transform(() => undefined)),
+
+  AISENSY_OWNER_SUMMARY_CAMPAIGN: z
+    .string()
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  AISENSY_OWNER_SUMMARY_CLEAR_CAMPAIGN: z
+    .string()
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

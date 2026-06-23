@@ -5,6 +5,7 @@ import { unscoped, withTenant } from '../db/pool.js';
 import { env } from '../config/env.js';
 import { todayIST } from '../services/dates.js';
 import { sendWhatsApp } from '../services/whatsapp.js';
+import { runOwnerSummaries } from '../services/runOwnerSummaries.js';
 
 // Send at exactly 1 day and 2 days before expiry.
 const REMINDER_DAYS = [1, 2] as const;
@@ -162,10 +163,14 @@ export async function runDailyReminders(log: FastifyBaseLogger): Promise<void> {
 }
 
 /**
- * Schedule the daily reminder cron.
- * Fires at 08:00 IST = 02:30 UTC every day.
+ * Schedule both daily crons. Completely independent — one does not affect
+ * the other; both start at server boot.
+ *
+ * 1. Member expiry reminders  → 08:00 IST = 02:30 UTC
+ * 2. Owner daily summary      → 04:00 AM IST = 22:30 UTC (previous calendar day)
  */
 export function startDailyCron(log: FastifyBaseLogger): void {
+  // ── Member reminder: 08:00 IST (02:30 UTC) ──────────────────────────────
   cron.schedule(
     '30 2 * * *',
     () => {
@@ -173,5 +178,15 @@ export function startDailyCron(log: FastifyBaseLogger): void {
     },
     { timezone: 'UTC' },
   );
-  log.info('reminders: cron scheduled — fires daily at 08:00 IST (02:30 UTC)');
+  log.info('reminders: member-reminder cron scheduled — fires daily at 08:00 IST (02:30 UTC)');
+
+  // ── Owner daily summary: 04:00 AM IST (22:30 UTC previous day) ──────────
+  cron.schedule(
+    '30 22 * * *',
+    () => {
+      void runOwnerSummaries(log);
+    },
+    { timezone: 'UTC' },
+  );
+  log.info('reminders: owner-summary cron scheduled — fires daily at 04:00 AM IST (22:30 UTC)');
 }
