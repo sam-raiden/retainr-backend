@@ -1,14 +1,14 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { withTenant } from '../db/pool.js';
+import { supabase } from '../lib/supabase.js';
 import { env } from '../config/env.js';
 import { todayIST } from './dates.js';
+import { generateDailySummaryImage, type SummaryMember } from './imageGenerator.js';
 
-interface MemberRow {
-  name: string;
-  phone: string;
-  plan: string;
-  price: number | null;
-  expiry_date: string; // date string from pg, e.g. "2026-06-24"
+const DAILY_SUMMARIES_BUCKET = 'daily-summaries';
+
+interface MemberRow extends SummaryMember {
+  expiry_date: string;
 }
 
 function memberLine(m: MemberRow): string {
@@ -16,7 +16,6 @@ function memberLine(m: MemberRow): string {
 }
 
 function formatDateLabel(isoDate: string): string {
-  // "2026-06-24" → "Wednesday, 24 June 2026"
   const [y, mo, d] = isoDate.split('-').map(Number) as [number, number, number];
   return new Date(Date.UTC(y, mo - 1, d)).toLocaleDateString('en-IN', {
     weekday: 'long',
@@ -27,39 +26,79 @@ function formatDateLabel(isoDate: string): string {
   });
 }
 
-async function sendSummaryMessage(
+// ── Image generation + upload ────────────────────────────────────────────────
+
+async function uploadSummaryImage(
+  gymId: string,
+  today: string,
+  gymName: string,
+  dateLabel: string,
+  expiring: MemberRow[],
+  expired: MemberRow[],
+  log: FastifyBaseLogger,
+): Promise<string | null> {
+  try {
+    const buffer = await generateDailySummaryImage(gymName, dateLabel, expiring, expired);
+    const path   = `${gymId}/${today}.png`;
+
+    const { error: uploadErr } = await supabase.storage
+      .from(DAILY_SUMMARIES_BUCKET)
+      .upload(path, buffer, { contentType: 'image/png', upsert: true });
+
+    if (uploadErr) {
+      log.warn({ err: uploadErr.message, gymId }, 'owner-summary: image upload failed');
+      return null;
+    }
+
+    const { data } = supabase.storage.from(DAILY_SUMMARIES_BUCKET).getPublicUrl(path);
+    return data.publicUrl;
+  } catch (err) {
+    log.warn({ err, gymId }, 'owner-summary: image generation failed — falling back to text');
+    return null;
+  }
+}
+
+// ── AiSensy send (image or text fallback) ────────────────────────────────────
+
+async function sendViaAiSensy(
   ownerPhone: string,
   gymName: string,
-  expiringToday: MemberRow[],
-  alreadyExpired: MemberRow[],
+  expiring: MemberRow[],
+  expired: MemberRow[],
   todayLabel: string,
+  imageUrl: string | null,
 ): Promise<string> {
   if (!env.AISENSY_API_KEY) throw new Error('AISENSY_API_KEY not configured');
 
-  // Normalise phone: strip non-digits, strip leading 0, prefix 91
-  const digits = ownerPhone.replace(/\D/g, '').replace(/^0+/, '');
+  const digits      = ownerPhone.replace(/\D/g, '').replace(/^0+/, '');
   const destination = digits.startsWith('91') ? digits : `91${digits}`;
 
-  const isAllClear = expiringToday.length === 0 && alreadyExpired.length === 0;
+  let campaignName: string;
+  let templateParams: string[];
+  let media: object;
 
-  const campaignName = isAllClear
-    ? (env.AISENSY_OWNER_SUMMARY_CLEAR_CAMPAIGN ?? 'gym_owner_summary_clear')
-    : (env.AISENSY_OWNER_SUMMARY_CAMPAIGN        ?? 'gym_owner_summary');
-
-  const templateParams: string[] = isAllClear
-    ? [gymName, todayLabel]
-    : [
-        gymName,
-        todayLabel,
-        String(expiringToday.length),
-        expiringToday.length > 0
-          ? expiringToday.map(memberLine).join('\n')
-          : 'None today',
-        String(alreadyExpired.length),
-        alreadyExpired.length > 0
-          ? alreadyExpired.map(memberLine).join('\n')
-          : 'None',
-      ];
+  if (imageUrl) {
+    // Image template: header media + 2 text params
+    campaignName   = env.AISENSY_IMAGE_SUMMARY_CAMPAIGN ?? 'gym_daily_image_update';
+    templateParams = [gymName, todayLabel];
+    media          = { url: imageUrl, filename: `${gymName}-daily-summary.png` };
+  } else {
+    // Text fallback
+    const isAllClear = expiring.length === 0 && expired.length === 0;
+    campaignName   = isAllClear
+      ? (env.AISENSY_OWNER_SUMMARY_CLEAR_CAMPAIGN ?? 'gym_owner_summary_clear')
+      : (env.AISENSY_OWNER_SUMMARY_CAMPAIGN ?? 'gym_owner_summary');
+    templateParams = isAllClear
+      ? [gymName, todayLabel]
+      : [
+          gymName, todayLabel,
+          String(expiring.length),
+          expiring.length > 0 ? expiring.map(memberLine).join('\n') : 'None today',
+          String(expired.length),
+          expired.length > 0 ? expired.map(memberLine).join('\n') : 'None',
+        ];
+    media = {};
+  }
 
   const payload = {
     apiKey: env.AISENSY_API_KEY,
@@ -68,7 +107,7 @@ async function sendSummaryMessage(
     userName: gymName,
     templateParams,
     source: 'retainr-owner-summary',
-    media: {},
+    media,
     buttons: [],
     carouselCards: [],
   };
@@ -91,26 +130,25 @@ async function sendSummaryMessage(
   return json.submitted_message_id ?? 'unknown';
 }
 
+// ── Main export ──────────────────────────────────────────────────────────────
+
 /**
- * Build and send the daily owner summary for one gym.
- *
- * Expiring today  → expiry_date = today IST
- * Already expired → expiry_date < today IST
- *
- * Uses gym_owner_summary AiSensy campaign when any members are present;
- * gym_owner_summary_clear when everything is up to date.
+ * Generate image summary, upload to Supabase Storage, and send via AiSensy.
+ * Falls back to text message if image generation or upload fails.
  * Always logs to message_log with message_type = 'OWNER_SUMMARY'.
+ *
+ * Returns the public image URL (or null if fallback to text was used).
  */
 export async function sendGymOwnerSummary(
   gymId: string,
   gymName: string,
   ownerPhone: string,
   log: FastifyBaseLogger,
-): Promise<void> {
-  const today    = todayIST();
+): Promise<string | null> {
+  const today      = todayIST();
   const todayLabel = formatDateLabel(today);
 
-  // ── Fetch all members expiring on or before today ────────────────────────
+  // ── 1. Fetch expiring / expired members ──────────────────────────────────
   let expiringToday: MemberRow[] = [];
   let alreadyExpired: MemberRow[] = [];
 
@@ -131,32 +169,35 @@ export async function sendGymOwnerSummary(
       );
       return r.rows;
     });
-
     expiringToday  = rows.filter((m) => m.expiry_date.slice(0, 10) === today);
-    alreadyExpired = rows.filter((m) => m.expiry_date.slice(0, 10) <  today);
+    alreadyExpired = rows.filter((m) => m.expiry_date.slice(0, 10) < today);
   } catch (err) {
-    log.error({ err, gymId }, 'owner-summary: member query failed — skipping gym');
-    return;
+    log.error({ err, gymId }, 'owner-summary: member query failed — skipping');
+    return null;
   }
 
-  // ── Send ─────────────────────────────────────────────────────────────────
+  // ── 2. Generate image (best-effort; null = fall back to text) ────────────
+  const imageUrl = await uploadSummaryImage(
+    gymId, today, gymName, todayLabel, expiringToday, alreadyExpired, log,
+  );
+
+  log.info({ gymId, imageUrl: imageUrl ?? '(none — text fallback)', expiringToday: expiringToday.length, alreadyExpired: alreadyExpired.length }, 'owner-summary: image ready');
+
+  // ── 3. Send via AiSensy ───────────────────────────────────────────────────
   let msgId: string | undefined;
   let errorText: string | undefined;
   let status = 'FAILED';
 
   try {
-    msgId  = await sendSummaryMessage(ownerPhone, gymName, expiringToday, alreadyExpired, todayLabel);
+    msgId  = await sendViaAiSensy(ownerPhone, gymName, expiringToday, alreadyExpired, todayLabel, imageUrl);
     status = 'SENT';
-    log.info(
-      { gymId, gymName, expiringToday: expiringToday.length, alreadyExpired: alreadyExpired.length, msgId },
-      'owner-summary: sent',
-    );
+    log.info({ gymId, gymName, msgId, usedImage: imageUrl !== null }, 'owner-summary: sent');
   } catch (err) {
     errorText = err instanceof Error ? err.message : String(err);
     log.error({ err, gymId }, 'owner-summary: send failed');
   }
 
-  // ── Log + decrement credit ────────────────────────────────────────────────
+  // ── 4. Log to message_log + decrement credit ─────────────────────────────
   try {
     await withTenant(gymId, async (client) => {
       await client.query(
@@ -166,9 +207,9 @@ export async function sendGymOwnerSummary(
          VALUES ($1, NULL, $2, $3, $4, $5, $6, 'OWNER_SUMMARY')`,
         [
           gymId,
-          env.AISENSY_OWNER_SUMMARY_CAMPAIGN ?? 'gym_owner_summary',
+          env.AISENSY_IMAGE_SUMMARY_CAMPAIGN ?? 'gym_daily_image_update',
           status,
-          msgId  ?? null,
+          msgId    ?? null,
           errorText ?? null,
           status === 'SENT' ? new Date() : null,
         ],
@@ -185,4 +226,6 @@ export async function sendGymOwnerSummary(
   } catch (err) {
     log.error({ err, gymId }, 'owner-summary: log/credit update failed');
   }
+
+  return imageUrl;
 }
