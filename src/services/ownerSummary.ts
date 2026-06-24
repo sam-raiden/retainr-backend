@@ -12,8 +12,7 @@ interface MemberRow {
 }
 
 function memberLine(m: MemberRow): string {
-  const price = m.price != null ? `Rs.${m.price}` : 'Rs.?';
-  return `${m.name} | ${m.plan} | ${price} | ${m.phone}`;
+  return `${m.name} - Rs.${m.price ?? '?'} - ${m.phone}`;
 }
 
 function formatDateLabel(isoDate: string): string {
